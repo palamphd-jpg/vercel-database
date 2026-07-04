@@ -62,9 +62,10 @@ export async function POST(req: NextRequest) {
       comments: commentsStr,
     });
   } catch (err) {
-    console.error("Failed to write feedback to Excel file:", err);
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("Failed to write feedback:", err);
     return NextResponse.json(
-      { error: "Server configuration error. Please try again later." },
+      { error: "Server configuration error. Please try again later.", debug: message },
       { status: 500 }
     );
   }
