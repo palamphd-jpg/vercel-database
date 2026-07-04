@@ -1,5 +1,16 @@
 import ExcelJS from "exceljs";
-import { sql } from "@vercel/postgres";
+import { createClient } from "@vercel/postgres";
+
+// @vercel/postgres's global `sql` helper reads POSTGRES_URL by default.
+// Our Neon database was connected with prefix "STORAGE", so the env var
+// is STORAGE_URL (not POSTGRES_URL). We use createClient() to pass the
+// connection string explicitly, falling back to POSTGRES_URL just in case.
+function getClient() {
+  const connectionString =
+    process.env.STORAGE_URL ||
+    process.env.POSTGRES_URL;
+  return createClient({ connectionString });
+}
 
 // The "database" is now Postgres (via Vercel Postgres). This module still
 // exposes an Excel export (readDatabaseFile) so the admin download workflow
@@ -37,17 +48,20 @@ let tableEnsured: Promise<void> | null = null;
 // Cached in-process so we don't re-check on every single call.
 function ensureTable(): Promise<void> {
   if (!tableEnsured) {
-    tableEnsured = sql`
-      CREATE TABLE IF NOT EXISTS feedback (
-        id SERIAL PRIMARY KEY,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        rating INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        phone TEXT NOT NULL,
-        staff_experience TEXT NOT NULL,
-        comments TEXT NOT NULL
-      );
-    `.then(() => undefined);
+    const client = getClient();
+    tableEnsured = client.connect().then(() =>
+      client.sql`
+        CREATE TABLE IF NOT EXISTS feedback (
+          id SERIAL PRIMARY KEY,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          rating INTEGER NOT NULL,
+          name TEXT NOT NULL,
+          phone TEXT NOT NULL,
+          staff_experience TEXT NOT NULL,
+          comments TEXT NOT NULL
+        );
+      `
+    ).then(() => undefined);
   }
   return tableEnsured;
 }
@@ -56,8 +70,9 @@ function ensureTable(): Promise<void> {
  * Inserts one feedback entry as a new row in Postgres.
  */
 export async function appendFeedback(entry: FeedbackEntry): Promise<void> {
-  await ensureTable();
-  await sql`
+  const client = getClient();
+  await client.connect();
+  await client.sql`
     INSERT INTO feedback (rating, name, phone, staff_experience, comments)
     VALUES (${entry.rating}, ${entry.name}, ${entry.phone}, ${entry.staffExperience}, ${entry.comments});
   `;
@@ -69,8 +84,9 @@ export async function appendFeedback(entry: FeedbackEntry): Promise<void> {
  * export at GET /api/feedback.
  */
 export async function readDatabaseFile(): Promise<Buffer> {
-  await ensureTable();
-  const { rows } = await sql`
+  const client = getClient();
+  await client.connect();
+  const { rows } = await client.sql`
     SELECT created_at, rating, name, phone, staff_experience, comments
     FROM feedback
     ORDER BY created_at ASC;
@@ -105,7 +121,8 @@ export async function readDatabaseFile(): Promise<Buffer> {
 }
 
 export async function databaseExists(): Promise<boolean> {
-  await ensureTable();
-  const { rows } = await sql`SELECT 1 FROM feedback LIMIT 1;`;
+  const client = getClient();
+  await client.connect();
+  const { rows } = await client.sql`SELECT 1 FROM feedback LIMIT 1;`;
   return rows.length > 0;
 }
